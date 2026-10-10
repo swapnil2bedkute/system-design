@@ -105,6 +105,23 @@ Docker Desktop (Linux VM kernel 6.19+) pe Mongo 8 ko `GLIBC_TUNABLES=glibc.pthre
 | `pnpm mongo:down` | stop containers — **volumes stay** |
 | `pnpm mongo:status` | compact replica roles (PRIMARY / SECONDARY / DOWN) |
 | `pnpm mongo:reset` | wipe volumes + start fresh — **only this deletes data** |
+| `pnpm es:up` | start Elasticsearch (`infra/elasticsearch/compose.yaml`, volume `fk-es-data`) |
+| `pnpm es:down` | stop ES — **volume stays** |
+| `pnpm es:status` | ES cluster health |
+| `pnpm reindex:productsv2` | copy Mongo `productsv2` into the ES index (resume: `-- --from=<last id>`) |
+
+## Mongo mode
+
+`MONGO_MODE` = `auto` (default), `standalone`, `replica` or `sharded`. On startup each host in `MONGO_URI` is probed and the app adapts (standalone `w:1`, replica/sharded `w:majority`). A fixed value must match what is found, else startup fails. `NODE_ENV=production` only starts with `replica` or `sharded`.
+
+## productsv2 (Elasticsearch vs Mongo)
+
+- `/products` is unchanged. `/productsv2` is the same API on its own Mongo collection (`productsv2`, only the `_id` index).
+- `ENABLE_ES=true` serves list, search, page and cursor from Elasticsearch. `false` serves the same from Mongo. `/:id` is always Mongo.
+- Each list request logs `productsv2 list via elasticsearch|mongodb` at `LOG_LEVEL=http`. Startup logs the backend once.
+- Caps: `limit` max 100, `page * limit` max 10,000 (use cursor for deeper), `name` max 100 chars, ES timeout 3s. ES down (or circuit open) falls back to Mongo for that request. Every list response carries an `X-Backend` header (`elasticsearch`, `mongodb` or `mongodb-fallback`) and a log line. The fallback only has data if the Mongo the app points to has a `productsv2` collection.
+- Setup: `pnpm es:up`, copy `products` into `productsv2` in Mongo, `pnpm reindex:productsv2`, set `ENABLE_ES=true`.
+- Turned `ENABLE_ES` off for a while? Run `pnpm reindex:productsv2` before turning it on again, ES is not synced while off.
 
 ## Running via pm2
 

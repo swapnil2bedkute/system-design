@@ -7,6 +7,7 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 
 import productsRouter from "./features/products/products.router.js";
+import productsV2Router from "./features/productsv2/productsv2.router.js";
 import cartRouter from "./features/cart/cart.router.js";
 import wishlistRouter from "./features/wishlist/wishlist.router.js";
 import usersRouter from "./features/users/users.router.js";
@@ -27,6 +28,10 @@ export const buildApp = async () => {
     logger: false,
     bodyLimit: BODY_LIMIT,
   });
+
+  // Must be set before any plugin registers: child plugins copy the handler at register time,
+  // so setting it at the end left /products, /productsv2 etc. on Fastify's default handler.
+  app.setErrorHandler(errorHandler);
 
   // await app.register(helmet);
   await app.register(cors);
@@ -85,6 +90,7 @@ export const buildApp = async () => {
     api.addHook("onRequest", mongoGate);
     await api.register(usersRouter, { prefix: "/users" });
     await api.register(productsRouter, { prefix: "/products" });
+    await api.register(productsV2Router, { prefix: "/productsv2" });
     await api.register(cartRouter, { prefix: "/cart" });
     await api.register(wishlistRouter, { prefix: "/wishlist" });
   });
@@ -92,7 +98,6 @@ export const buildApp = async () => {
   app.setNotFoundHandler((req, reply) => {
     reply.code(404).send({ error: `Route ${req.method} ${req.url} not found` });
   });
-  app.setErrorHandler(errorHandler);
 
   return app;
 };

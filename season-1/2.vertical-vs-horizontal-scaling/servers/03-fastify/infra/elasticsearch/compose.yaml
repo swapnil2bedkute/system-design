@@ -1,0 +1,35 @@
+name: fk-es
+
+volumes:
+  es-data:
+    name: fk-es-data
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.1
+    container_name: fk-elasticsearch
+    restart: unless-stopped
+    # index is a few MB (50k docs): 512m heap is plenty. The container needs about 2x the heap
+    # (JVM non-heap + file cache), so the cap is 1.5g. A cap is not a reservation. Raise both if data grows.
+    mem_limit: 1536m
+    environment:
+      discovery.type: single-node
+      # local dev only: no auth, no TLS
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      # a full disk must not flip the index to read-only on a dev laptop
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s

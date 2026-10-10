@@ -51,9 +51,31 @@ export const connectRedis = async (): Promise<void> => {
   await Promise.race([connectAttempt, new Promise<void>((resolve) => setTimeout(resolve, 3000))]);
 };
 
+const QUIT_TIMEOUT_MS = 2000;
+
+// quit() waits for a live connection, so while Redis is down (reconnect loop) it never settles and
+// blocks the whole graceful shutdown. Down = destroy() now. Up = polite quit(), destroy() if it stalls.
 export const disconnectRedis = async (): Promise<void> => {
-  if (redisClient.isOpen) {
-    await redisClient.quit();
-    logger.info("Redis disconnected");
+  if (!redisClient.isOpen) return;
+
+  if (!redisClient.isReady) {
+    redisClient.destroy();
+    logger.info("Redis destroyed (was not connected)");
+    return;
   }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const quit = redisClient.quit().then(() => true);
+  const stalled = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), QUIT_TIMEOUT_MS);
+  });
+  const clean = await Promise.race([quit, stalled]).catch(() => false);
+  clearTimeout(timer);
+
+  if (clean) {
+    logger.info("Redis disconnected");
+    return;
+  }
+  redisClient.destroy();
+  logger.warn(`Redis quit did not finish in ${QUIT_TIMEOUT_MS}ms, destroyed`);
 };

@@ -1,0 +1,21 @@
+{
+  "name": "cuckoo-filters-uwebsocket",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <25 || >=26"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node scripts/cuckoo.check.js",
+    "smoke": "node scripts/http.smoke.js",
+    "migrate:es": "node scripts/mongo-to-es.js"
+  },
+  "dependencies": {
+    "@elastic/elasticsearch": "^9.5.1",
+    "mongoose": "^9.0.0",
+    "redis": "^6.3.0",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.71.0"
+  }
+}

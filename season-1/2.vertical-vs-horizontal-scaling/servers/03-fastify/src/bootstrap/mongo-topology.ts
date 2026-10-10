@@ -39,7 +39,7 @@ const readDescription = (): TopologyDesc | null => {
 };
 
 const isUp = (type: string): boolean =>
-  type === "RSPrimary" || type === "RSSecondary" || type === "Standalone";
+  type === "RSPrimary" || type === "RSSecondary" || type === "Standalone" || type === "Mongos";
 
 const uniqueMembers = (servers: Map<string, ServerDesc>): ServerDesc[] => {
   const byPort = new Map<string, ServerDesc>();
@@ -68,12 +68,16 @@ export const getMongoTopology = (): MongoTopology => {
     const servers = description?.servers;
     if (!servers || servers.size === 0) return empty;
 
-    const members = uniqueMembers(servers);
+    // sharded: members are mongos routers, and any one router is enough. uniqueMembers() dedupes by
+    // port (docker port-mapping quirk), which would merge routers on different machines.
+    const all = [...servers.values()];
+    const sharded = all.some((s) => s.type === "Mongos");
+    const members = sharded ? all : uniqueMembers(servers);
     let membersUp = 0;
     let primaryHost: string | null = null;
 
     for (const server of members) {
-      if (server.type === "RSPrimary" || server.type === "Standalone") {
+      if (server.type === "RSPrimary" || server.type === "Standalone" || server.type === "Mongos") {
         membersUp += 1;
         primaryHost = displayMember(server.address);
       } else if (server.type === "RSSecondary") {
@@ -82,7 +86,7 @@ export const getMongoTopology = (): MongoTopology => {
     }
 
     const membersTotal = members.length; // 1
-    const majority = Math.floor(membersTotal / 2) + 1; // 1
+    const majority = sharded ? 1 : Math.floor(membersTotal / 2) + 1; // 1
     const electionPossible = membersUp >= majority; // 1 >= 1 => true
     const writes = primaryHost !== null && electionPossible; // Standalone && electionPossible => true
     const reads = membersUp > 0;

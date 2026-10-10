@@ -30,7 +30,8 @@
       "min_uptime": "10s",
       "max_restarts": 10,
       "env": {
-        "NODE_ENV": "production"
+        "NODE_ENV": "production",
+        "MONGO_MODE": "replica"
       },
       "error_file": "./logs/prod-error.log",
       "out_file": "./logs/prod-out.log",

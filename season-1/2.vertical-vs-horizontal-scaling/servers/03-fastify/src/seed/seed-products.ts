@@ -26,6 +26,11 @@ const parseIntFlag = (name: string): number | undefined => {
   return Math.floor(value);
 };
 
+// --collection=productsv2 seeds the v2 collection. It keeps only the _id index (the category
+// index is rebuilt for "products" only). Default stays "products".
+const COLLECTION = process.argv.find((a) => a.startsWith("--collection="))?.split("=")[1] || "products";
+const IS_DEFAULT_COLLECTION = COLLECTION === "products";
+
 const BATCH_SIZE = parseIntFlag("batch-size") ?? DEFAULT_BATCH_SIZE;
 const CONCURRENCY = parseIntFlag("concurrency") ?? defaultConcurrency();
 const PROGRESS_EVERY_N_BATCHES = 20;
@@ -158,7 +163,7 @@ const resolveCount = async (): Promise<number> => {
 };
 
 const dropNonIdIndexes = async (): Promise<void> => {
-  const collection = mongoose.connection.collection<ProductDocument>("products");
+  const collection = mongoose.connection.collection<ProductDocument>(COLLECTION);
 
   try {
     const indexes = await collection.indexes();
@@ -178,7 +183,7 @@ const dropNonIdIndexes = async (): Promise<void> => {
 };
 
 const rebuildCategoryIndex = async (): Promise<void> => {
-  const collection = mongoose.connection.collection<ProductDocument>("products");
+  const collection = mongoose.connection.collection<ProductDocument>(COLLECTION);
   await collection.createIndex({ category: 1 });
   logger.info("Rebuilt index on 'category'");
 };
@@ -189,7 +194,7 @@ const insertBatch = async (batchSize: number, startIndex: number): Promise<numbe
     docs[i] = generateProduct(startIndex + i);
   }
 
-  const collection = mongoose.connection.collection<ProductDocument>("products");
+  const collection = mongoose.connection.collection<ProductDocument>(COLLECTION);
   // Raw driver insertMany (not Product.insertMany) - skips Mongoose document
   // hydration/validation entirely, which is the dominant cost at 10M-doc scale.
   const result = await collection.insertMany(docs as unknown as ProductDocument[], { ordered: false });
@@ -234,7 +239,7 @@ const runBatchesWithConcurrency = async (
 const main = async (): Promise<void> => {
   try {
     const count = await resolveCount();
-    logger.info(`Seeding ${count} products...`);
+    logger.info(`Seeding ${count} products into "${COLLECTION}"...`);
 
     await connectDatabase();
 
@@ -245,7 +250,7 @@ const main = async (): Promise<void> => {
 
     const { inserted, startedAt } = await runBatchesWithConcurrency(batches, CONCURRENCY);
 
-    await rebuildCategoryIndex();
+    if (IS_DEFAULT_COLLECTION) await rebuildCategoryIndex();
 
     await disconnectDatabase();
 

@@ -63,6 +63,13 @@ export const errorHandler = (
     return;
   }
 
+  // a dependency with its own circuit breaker (Elasticsearch) says "down, retry in N seconds"
+  const retryAfter = (err as { retryAfter?: unknown }).retryAfter;
+  if (typeof retryAfter === "number") {
+    reply.header("Retry-After", String(retryAfter)).code(503).send({ error: err.message });
+    return;
+  }
+
   const status = statusOf(err as HttpError | FastifyError);
   if (status >= 500) {
     logger.error(err.stack ?? err.message);
