@@ -86,3 +86,19 @@ Each PM2 worker holds its own filter. Mongo writes are announced on the Redis st
 - Restart rebuilds the filter from Mongo.
 - During a rebuild (seconds) the old filter keeps answering. Names added meanwhile go to the new-names set.
 - If Elasticsearch is down during an ingest, its batches are not retried by the stream. Run `pnpm migrate:es` once ES is back (it adds, it does not remove).
+
+## Benchmark
+
+`GET /check-username` only, so no data changes. k6 for 15 seconds per scenario, 80 virtual users, k6 limited to 4 cores (`GOMAXPROCS=4`). The app ran as 4 PM2 workers on one port. Data: 3,023,103 usernames in Mongo and Elasticsearch, 16 bit filter (~6.5 MB per worker). Elasticsearch was up, so Mongo got no checks. All runs had 0 failed requests.
+
+| Scenario | Requests | Req/s | Avg latency | p95 | Answered by filter | Sent to ES |
+|---|---|---|---|---|---|---|
+| 100% new names | 966,179 | 64,406 | 1.19 ms | 2.9 ms | 966,159 (99.998%) | 20 (false alarms) |
+| 50% new, 50% existing | 398,466 | 26,558 | 2.96 ms | 8.6 ms | 199,076 (50%) | 199,390 |
+| 100% existing | 243,687 | 16,240 | 4.87 ms | 9.7 ms | 0 | 243,687 (100%) |
+
+- Free names never touch a database. That is where the filter pays off.
+- With only existing names the filter cannot help, every check goes to Elasticsearch.
+- RAM during the runs: app (4 workers together) ~0.8 to 1.2 GB, Mongo ~40 MB, Elasticsearch ~1.14 GB.
+- Compared with the Bloom and Cuckoo topics on the same data and machine, req/s is within about 5%. The Fuse filter is the smallest in memory (~6.5 MB vs ~7.5 MB Bloom and ~14 MB Cuckoo).
+- Numbers move with other load on the machine. Treat them as relative, not absolute.
