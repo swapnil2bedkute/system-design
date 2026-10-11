@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HLD: Membership Filters over Sharded MongoDB</title>
+<style>
+  :root { --bg:#fafaf8; --fg:#1c1c1a; --line:#d9d9d2; --card:#fff; --accent:#1f5fbf; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141413; --fg:#ececE8; --line:#34342f; --card:#1d1d1b; --accent:#7aa7f0; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.6 system-ui,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:36px 0 10px; border-top:1px solid var(--line); padding-top:14px; }
+  table { width:100%; border-collapse:collapse; margin:10px 0; background:var(--card); font-size:15px; }
+  th,td { border:1px solid var(--line); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:color-mix(in srgb,var(--accent) 12%,var(--card)); }
+  code { background:color-mix(in srgb,var(--fg) 8%,transparent); padding:1px 5px; border-radius:4px; }
+  svg { width:100%; height:auto; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  svg text { fill:var(--fg); font:13px system-ui,sans-serif; }
+  svg .b { fill:var(--card); stroke:var(--fg); stroke-width:1.3; }
+  svg .a { fill:color-mix(in srgb,var(--accent) 15%,var(--card)); stroke:var(--accent); stroke-width:1.5; }
+  svg .l { stroke:var(--fg); stroke-width:1.3; fill:none; marker-end:url(#h); }
+  svg marker path { fill:var(--fg); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>HLD: Membership Filters over Sharded MongoDB</h1>
+<p>Season 1 / Searching. Language independent: Java, Python, Go, Rust or Node.js can all build this.</p>
+
+<h2>1. Goal</h2>
+<ul>
+  <li>Answer "does this key exist?" fast, and skip the database for most misses.</li>
+  <li>A small in-memory <b>filter</b> sits in front of sharded + replicated MongoDB.</li>
+  <li>Same design, three filters: <b>Bloom</b>, <b>Cuckoo</b>, <b>Binary Fuse</b>.</li>
+</ul>
+
+<table>
+  <tr><th>Filter says</th><th>Meaning</th><th>Action</th></tr>
+  <tr><td>definitely not</td><td>Always true. No false negatives.</td><td>Return "not found". Skip DB.</td></tr>
+  <tr><td>maybe</td><td>Can be a false positive.</td><td>Ask DB. DB is the truth.</td></tr>
+</table>
+
+<h2>2. Diagram</h2>
+<svg viewBox="0 0 900 470" role="img" aria-label="Architecture">
+  <defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>
+
+  <rect class="b" x="360" y="10" width="180" height="36" rx="8"/><text x="450" y="33" text-anchor="middle">Clients</text>
+  <path class="l" d="M450 46 L450 66"/>
+  <rect class="a" x="340" y="68" width="220" height="38" rx="8"/><text x="450" y="92" text-anchor="middle">NGINX (load balancer)</text>
+
+  <path class="l" d="M450 106 L120 140"/><path class="l" d="M450 106 L340 140"/>
+  <path class="l" d="M450 106 L560 140"/><path class="l" d="M450 106 L780 140"/>
+
+  <rect class="b" x="20" y="140" width="200" height="86" rx="8"/><text x="120" y="162" text-anchor="middle">Worker 1</text><text x="120" y="184" text-anchor="middle">HTTP + Filter</text><text x="120" y="204" text-anchor="middle" font-size="11">Bloom | Cuckoo | Fuse</text>
+  <rect class="b" x="240" y="140" width="200" height="86" rx="8"/><text x="340" y="162" text-anchor="middle">Worker 2</text><text x="340" y="184" text-anchor="middle">HTTP + Filter</text><text x="340" y="204" text-anchor="middle" font-size="11">Bloom | Cuckoo | Fuse</text>
+  <rect class="b" x="460" y="140" width="200" height="86" rx="8"/><text x="560" y="162" text-anchor="middle">Worker 3</text><text x="560" y="184" text-anchor="middle">HTTP + Filter</text><text x="560" y="204" text-anchor="middle" font-size="11">Bloom | Cuckoo | Fuse</text>
+  <rect class="b" x="680" y="140" width="200" height="86" rx="8"/><text x="780" y="162" text-anchor="middle">Worker 4</text><text x="780" y="184" text-anchor="middle">HTTP + Filter</text><text x="780" y="204" text-anchor="middle" font-size="11">Bloom | Cuckoo | Fuse</text>
+  <text x="450" y="250" text-anchor="middle" font-size="12">4 parallel workers (Node: PM2 processes, Java: threads). Each has its own filter in memory.</text>
+
+  <path class="l" d="M120 226 L400 290"/><path class="l" d="M340 226 L430 290"/>
+  <path class="l" d="M560 226 L470 290"/><path class="l" d="M780 226 L500 290"/>
+  <rect class="a" x="350" y="292" width="200" height="38" rx="8"/><text x="450" y="316" text-anchor="middle">mongos (router)</text>
+
+  <path class="l" d="M410 330 L170 366"/><path class="l" d="M450 330 L450 366"/><path class="l" d="M490 330 L730 366"/>
+  <rect class="b" x="50" y="368" width="240" height="90" rx="8"/><text x="170" y="392" text-anchor="middle">Shard A</text><text x="170" y="414" text-anchor="middle" font-size="12">Primary</text><text x="170" y="434" text-anchor="middle" font-size="12">Secondary 1, Secondary 2</text>
+  <rect class="b" x="330" y="368" width="240" height="90" rx="8"/><text x="450" y="392" text-anchor="middle">Shard B</text><text x="450" y="414" text-anchor="middle" font-size="12">Primary</text><text x="450" y="434" text-anchor="middle" font-size="12">Secondary 1, Secondary 2</text>
+  <rect class="b" x="610" y="368" width="240" height="90" rx="8"/><text x="730" y="392" text-anchor="middle">Shard C</text><text x="730" y="414" text-anchor="middle" font-size="12">Primary</text><text x="730" y="434" text-anchor="middle" font-size="12">Secondary 1, Secondary 2</text>
+</svg>
+
+<h2>3. Components</h2>
+<table>
+  <tr><th>Part</th><th>Job</th></tr>
+  <tr><td>NGINX</td><td>Spreads traffic across the 4 workers.</td></tr>
+  <tr><td>Worker (x4)</td><td>Handles HTTP. Checks its filter first. Calls DB only for "maybe".</td></tr>
+  <tr><td>Filter</td><td>In-memory "definitely not / maybe" check. Rebuilt from DB on start.</td></tr>
+  <tr><td>mongos</td><td>Routes each query to the right shard.</td></tr>
+  <tr><td>Shard</td><td>One slice of data. Replica set: 1 primary + 2 secondaries.</td></tr>
+</table>
+
+<h2>4. Filter contract (same for all three)</h2>
+<table>
+  <tr><th>Operation</th><th>Meaning</th></tr>
+  <tr><td><code>build(keys)</code></td><td>Create filter from all existing keys</td></tr>
+  <tr><td><code>might_contain(key)</code></td><td>false = definitely absent, true = maybe present</td></tr>
+  <tr><td><code>add(key)</code></td><td>Insert new key (not supported by Binary Fuse)</td></tr>
+  <tr><td><code>remove(key)</code></td><td>Delete key (only Cuckoo)</td></tr>
+  <tr><td><code>stats()</code></td><td>Size, key count, load, for benchmarks</td></tr>
+</table>
+<p>Switch filter with one config value: <code>FILTER_TYPE = bloom | cuckoo | binary_fuse</code>.</p>
+
+<table>
+  <tr><th></th><th>Bloom</th><th>Cuckoo</th><th>Binary Fuse</th></tr>
+  <tr><td>add after build</td><td>yes</td><td>yes (can fail when full)</td><td>no</td></tr>
+  <tr><td>remove</td><td>no</td><td>yes</td><td>no</td></tr>
+  <tr><td>Rough bits per key</td><td>~9.6 (1% false positive)</td><td>~8.4 (~3% false positive)</td><td>~9 (~0.4% false positive)</td></tr>
+  <tr><td>Best for</td><td>Append-only data</td><td>Data with deletes</td><td>Read-mostly data</td></tr>
+</table>
+<p>Numbers are rough. The benchmark episode will measure the real ones.</p>
+
+<h2>5. Request flows</h2>
+<table>
+  <tr><th>Flow</th><th>Steps</th></tr>
+  <tr><td>Read key K</td><td>1. Ask filter. 2. If "definitely not", return not found (no DB call). 3. If "maybe", query DB. 4. DB has it: return it. DB does not: false positive, return not found.</td></tr>
+  <tr><td>Write key K</td><td>1. Write to DB first (majority write concern). 2. After success, <code>filter.add(K)</code>. 3. Other workers get it from the change stream.</td></tr>
+  <tr><td>Delete key K</td><td>Delete from DB. Cuckoo: also <code>filter.remove(K)</code>. Bloom and Fuse: key stays as a harmless false positive until next rebuild.</td></tr>
+</table>
+<p><b>Rule:</b> DB first, filter second. A filter that says "maybe" for a missing key is fine. A filter that says "no" for an existing key is a bug.</p>
+
+<h2>6. Keeping 4 workers in sync</h2>
+<table>
+  <tr><th>Piece</th><th>How</th></tr>
+  <tr><td>Startup</td><td>Each worker reads all keys from DB and builds its filter. It serves traffic only after that.</td></tr>
+  <tr><td>Live updates</td><td>Each worker listens to a MongoDB change stream and calls <code>add</code> or <code>remove</code>.</td></tr>
+  <tr><td>No gap</td><td>Start the change stream before the startup scan, so no key is missed.</td></tr>
+  <tr><td>Periodic rebuild</td><td>Build a new filter in background, swap it in one step.</td></tr>
+  <tr><td>Binary Fuse</td><td>Cannot add. Keep a small delta set of new keys. Lookup checks filter OR delta set. Rebuild folds it in.</td></tr>
+  <tr><td>Filter full</td><td>If Cuckoo add fails or Bloom is over capacity, rebuild bigger.</td></tr>
+</table>
+
+<h2>7. Database choices</h2>
+<table>
+  <tr><th>Topic</th><th>Choice</th><th>Why</th></tr>
+  <tr><td>Shard key</td><td>Hashed key (example: hashed <code>_id</code>)</td><td>Even spread, point lookup hits one shard</td></tr>
+  <tr><td>Replicas</td><td>1 primary + 2 secondaries per shard</td><td>Survives one node failure</td></tr>
+  <tr><td>Write concern</td><td>majority</td><td>Write survives failover</td></tr>
+  <tr><td>Confirm-read</td><td>Read from primary</td><td>Secondaries can lag and give a wrong "not found"</td></tr>
+  <tr><td>Index</td><td>Unique index on lookup key</td><td>Confirm-read is one index hit</td></tr>
+</table>
+
+<h2>8. Failures</h2>
+<table>
+  <tr><th>Failure</th><th>Response</th></tr>
+  <tr><td>Worker restarts</td><td>Rebuild filter from DB. Do not serve until ready.</td></tr>
+  <tr><td>Change stream breaks</td><td>Resume from last token. If too old, full rebuild.</td></tr>
+  <tr><td>Primary fails</td><td>Driver retries writes. Filter unchanged.</td></tr>
+  <tr><td>Shard down</td><td>"Maybe" answers for its keys return error. "Definitely not" still works.</td></tr>
+</table>
+
+<h2>9. Metrics for comparison</h2>
+<table>
+  <tr><th>Metric</th><th>Meaning</th></tr>
+  <tr><td>False positive rate</td><td>DB confirm-reads that found nothing / filter "maybe" answers</td></tr>
+  <tr><td>DB calls saved</td><td>"Definitely not" answers / total lookups</td></tr>
+  <tr><td>Latency p50, p99</td><td>Filter check alone and full request</td></tr>
+  <tr><td>Memory per key</td><td>Filter bytes / key count</td></tr>
+  <tr><td>Build time</td><td>Time to build from N keys</td></tr>
+</table>
+
+<h2>10. Folders and next step</h2>
+<table>
+  <tr><th>Path</th><th>Contents</th></tr>
+  <tr><td><code>season-1/3.Searching/design/hld/</code></td><td>This file</td></tr>
+  <tr><td><code>season-1/3.Searching/design/lld/</code></td><td>Next: <code>01-lld-bloom-filter.html</code>, <code>02-lld-cuckoo-filter.html</code>, <code>03-lld-binary-fuse-filter.html</code></td></tr>
+</table>
+
+</main>
+</body>
+</html>

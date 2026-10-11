@@ -41,6 +41,18 @@ const NGINX_PREFIX = {
   "05-go": "/go",
 };
 
+const DEFAULT_API = "/products?limit=10";
+
+// ponytail: the search combo exists in the seed data (Premium + Electronics). Change it here if the seed changes.
+const FASTIFY_APIS = [
+  { value: DEFAULT_API, label: "/products list (Mongo, text + category index)" },
+  { value: "/productsv2?limit=10", label: "/productsv2 list (ES or Mongo, follows ENABLE_ES)" },
+  {
+    value: "/productsv2?name=Premium&category=Electronics&limit=10",
+    label: "/productsv2 search, name + category (ES or Mongo, follows ENABLE_ES)",
+  },
+];
+
 const stopIfCancel = (value) => {
   if (p.isCancel(value)) {
     p.cancel("Stopped.");
@@ -143,9 +155,23 @@ const encoding = chosen.nginx
     )
   : null;
 
-const url = `${chosen.base}/products?limit=10`;
+// Only 03-fastify has /productsv2. Every other server keeps the plain list.
+const apiPath = chosen.value.startsWith("03-fastify")
+  ? stopIfCancel(
+      await p.select({
+        message: "Which API?",
+        options: FASTIFY_APIS,
+      }),
+    )
+  : DEFAULT_API;
+
+const url = `${chosen.base}${apiPath}`;
 p.note(
-  `${chosen.label}${encoding ? ` | ${encoding}` : ""}\n${url}`,
+  `${chosen.label}${encoding ? ` | ${encoding}` : ""}\n${url}${
+    apiPath.startsWith("/productsv2")
+      ? "\nBackend follows ENABLE_ES in that server's .env. Use LOG_LEVEL=info for a clean run."
+      : ""
+  }`,
   "Running",
 );
 

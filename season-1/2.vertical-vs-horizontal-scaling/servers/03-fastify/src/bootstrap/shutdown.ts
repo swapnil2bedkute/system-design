@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import { logger } from "./logger.js";
 import { disconnectDatabase } from "./database.js";
 import { disconnectRedis } from "./redis.js";
+import { closeElastic } from "./elastic.js";
 import { flushIngestOnShutdown } from "../features/products/products.ingest.js";
 
 export const registerProcessHandlers = (): void => {
@@ -26,7 +27,7 @@ export const registerGracefulShutdown = (server: Server): void => {
         } catch (err) {
           logger.error(`ingest shutdown flush failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-        await Promise.all([disconnectDatabase(), disconnectRedis()]);
+        await Promise.all([disconnectDatabase(), disconnectRedis(), closeElastic()]);
       })().finally(() => process.exit(0));
     });
   };

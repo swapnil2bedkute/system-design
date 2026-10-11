@@ -13,7 +13,7 @@ export const options = {
         { duration: "5s", target: 10000 }, // yaha pe tootega
         { duration: "5s", target: 0 },
       ],
-      gracefulRampDown: "0s",
+      gracefulRampDown: "5s",
     },
   },
   thresholds: {

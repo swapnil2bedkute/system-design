@@ -16,9 +16,17 @@ const envSchema = z.object({
     .refine((v) => v.startsWith("mongodb://") || v.startsWith("mongodb+srv://"), {
       message: "MONGO_URI must start with mongodb:// or mongodb+srv://",
     })
-    .default(
-      "mongodb://127.0.0.1:27017/flip-commerce",
-    ),
+    .default("mongodb://127.0.0.1:27017,127.0.0.1:27018,127.0.0.1:27019/flip-commerce"),
+  // auto = probe the hosts and adapt (dev/test). A fixed value is probed too and must match,
+  // otherwise startup fails. Production must pin replica or sharded (checked below).
+  MONGO_MODE: z.enum(["auto", "standalone", "replica", "sharded"]).default("auto"),
+  // productsv2 only. true = list/search from Elasticsearch, false = same list from Mongo.
+  ENABLE_ES: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  ES_URL: z.string().url().default("http://127.0.0.1:9200"),
+  ES_INDEX: z.string().min(1).default("productsv2"),
   REDIS_URL: z.string().url().default("redis://127.0.0.1:6379"),
   LOG_LEVEL: z.enum(["error", "warn", "info", "http", "debug"]).default("info"),
   // z.coerce.boolean() would treat the literal string "false" as truthy - explicit
@@ -38,6 +46,12 @@ const envSchema = z.object({
   MONGO_CIRCUIT_MS: z.coerce.number().int().positive().default(2000),
   MONGO_CIRCUIT_FAILS: z.coerce.number().int().positive().default(3),
   MONGO_SELECT_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  // Connection pool PER WORKER (and per Mongo member). Rule of thumb: total across workers about
+  // 2-4x the Mongo CPU cores. More than that adds threads, not speed. Min pre-warms connections so a
+  // sudden load spike does not wait on the driver opening them 2 at a time.
+  // 50 per worker measured best (4 workers, 3000 users): 10 -> 30 gave +15%, 30 -> 50 +28%, 50 -> 80 only +4%.
+  MONGO_MAX_POOL: z.coerce.number().int().min(1).max(500).default(50),
+  MONGO_MIN_POOL: z.coerce.number().int().min(0).max(500).default(10),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -47,10 +61,20 @@ if (!parsed.success) {
   process.exit(1);
 }
 
+// payment data: never let production silently fall back to a node without majority writes
+if (parsed.data.NODE_ENV === "production" && !["replica", "sharded"].includes(parsed.data.MONGO_MODE)) {
+  console.error("Invalid environment configuration: MONGO_MODE must be replica or sharded in production");
+  process.exit(1);
+}
+
 export const env = {
   nodeEnv: parsed.data.NODE_ENV,
   port: parsed.data.PORT,
   mongoUri: parsed.data.MONGO_URI,
+  mongoMode: parsed.data.MONGO_MODE,
+  enableEs: parsed.data.ENABLE_ES,
+  esUrl: parsed.data.ES_URL,
+  esIndex: parsed.data.ES_INDEX,
   redisUrl: parsed.data.REDIS_URL,
   logLevel: parsed.data.LOG_LEVEL,
   isProd: parsed.data.NODE_ENV === "production",
@@ -63,4 +87,7 @@ export const env = {
   mongoCircuitMs: parsed.data.MONGO_CIRCUIT_MS,
   mongoCircuitFails: parsed.data.MONGO_CIRCUIT_FAILS,
   mongoSelectTimeoutMs: parsed.data.MONGO_SELECT_TIMEOUT_MS,
+  mongoMaxPool: parsed.data.MONGO_MAX_POOL,
+  // min can never exceed max, the driver rejects that
+  mongoMinPool: Math.min(parsed.data.MONGO_MIN_POOL, parsed.data.MONGO_MAX_POOL),
 };

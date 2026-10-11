@@ -1,0 +1,5 @@
+node_modules
+.env
+data
+native/target
+native/*.node
