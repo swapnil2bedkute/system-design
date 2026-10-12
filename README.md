@@ -6,10 +6,16 @@ This is not an app. There is no root build, lint, or test command. Each video to
 
 ## Topics
 
-| Path | Topic |
-|---|---|
-| `season-1/1.compressions/` | Compressions |
-| `season-1/2.vertical-vs-horizontal-scaling/` | Vertical vs horizontal scaling |
+| Path | Topic | Video |
+|---|---|---|
+| `season-1/1.compressions/` | Compressions | [Session 1](https://www.youtube.com/watch?v=DCYaJb8Bzdk) |
+| `season-1/2.vertical-vs-horizontal-scaling/` | Vertical vs horizontal scaling | [Session 2](https://www.youtube.com/watch?v=PMD1fat6QdY) |
+
+### Video references
+
+- Session 1: https://www.youtube.com/watch?v=DCYaJb8Bzdk
+- Session 2: https://www.youtube.com/watch?v=PMD1fat6QdY
+- Session 3: https://www.youtube.com/watch?v=pgLHXxW3Mg0
 
 New topic path: `season-1/<number>.<topic-name>/`.
 
