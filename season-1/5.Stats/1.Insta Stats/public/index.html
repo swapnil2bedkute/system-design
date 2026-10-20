@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Instagram</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-[#0c1014] text-[#f5f5f5] antialiased">
+  <!-- left icon rail, like Instagram desktop -->
+  <aside id="rail" class="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col items-center justify-between border-r border-[#262626] py-6 sm:flex">
+    <a href="/" title="Instagram" class="rail-ico"></a>
+    <nav id="railNav" class="flex flex-col items-center gap-7"></nav>
+    <div id="railBottom" class="flex flex-col items-center gap-7"></div>
+  </aside>
+
+  <main id="app" class="mx-auto max-w-[935px] px-4 py-8 sm:pl-[88px] lg:max-w-[1100px]"></main>
+
+  <div id="session" class="fixed bottom-6 right-6 z-30 flex items-center gap-3 cursor-default rounded-full bg-[#262626] py-3 pl-5 pr-4 text-sm shadow-xl"></div>
+  <div id="modal" class="fixed inset-0 z-40 hidden bg-black/70"></div>
+  <div id="toast" class="pointer-events-none fixed bottom-6 left-1/2 hidden -translate-x-1/2 rounded-lg bg-zinc-800 px-4 py-2 text-sm shadow-lg"></div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+    // "Login" only remembers which user you picked. It is sent as the x-user-id header on every call.
+    const session = {
+      get() { try { return localStorage.getItem("userId"); } catch { return null; } },
+      set(v) { try { localStorage.setItem("userId", v); } catch {} },
+      clear() { try { localStorage.removeItem("userId"); } catch {} },
+    };
+
+    // 8500000 -> "8.5M". null means the server could not read the counter.
+    const fmt = (n) => (n == null ? "-" : new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n));
+    // Likes, follows and views go through Kafka, so the real number lands a moment after the click.
+    const SYNC_MS = 1500;
+
+    async function api(url, method = "GET") {
+      const user = session.get();
+      const res = await fetch(url, { method, headers: user ? { "x-user-id": user } : {} });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Request failed (" + res.status + ")");
+      return body;
+    }
+
+    let toastTimer;
+    function toast(msg) {
+      const el = $("#toast");
+      el.textContent = msg;
+      el.classList.remove("hidden");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.add("hidden"), 2500);
+    }
+
+    const showError = (msg) => { $("#app").innerHTML = '<p class="py-20 text-center text-zinc-400">' + esc(msg) + '</p>'; };
+    const tick = '<svg viewBox="0 0 40 40" class="inline h-[18px] w-[18px] shrink-0" aria-label="Verified"><path fill="#0095f6" d="M19.998 3.094 14.638 0l-2.972 5.15H5.432v6.354L0 14.64 3.094 20 0 25.359l5.432 3.137v5.905h5.975L14.638 40l5.36-3.094L25.358 40l3.232-5.6h6.162v-6.01L40 25.359 36.905 20 40 14.641l-5.248-3.03v-6.46h-6.419L25.358 0l-5.36 3.094Zm7.415 11.225 2.254 2.287-11.43 11.5-6.835-6.93 2.244-2.258 4.587 4.581 9.18-9.18Z"/></svg>';
+
+    // stroke icons, 24px, currentColor
+    const svg = (d, cls = "h-6 w-6") => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="' + cls + '">' + d + '</svg>';
+    const I = {
+      insta: svg('<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".8" fill="currentColor"/>', "h-7 w-7"),
+      home: svg('<path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/>'),
+      reels: svg('<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m10 8.5 5 3.5-5 3.5z"/>'),
+      send: svg('<path d="M22 3 9.2 10.1M22 3l-7 18-3.8-8.9L3 8.3z"/>'),
+      search: svg('<circle cx="10.5" cy="10.5" r="7"/><path d="m21 21-5.5-5.5"/>'),
+      heart: svg('<path d="M16.8 3.5c-2 0-3.6 1-4.8 2.7C10.8 4.5 9.2 3.5 7.2 3.5A4.7 4.7 0 0 0 2.5 8.4c0 5.5 9.5 12.1 9.5 12.1s9.5-6.6 9.5-12.1a4.7 4.7 0 0 0-4.7-4.9z"/>'),
+      plus: svg('<path d="M12 4v16M4 12h16"/>'),
+      chart: svg('<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 16v-4M12 16V8M16 16v-6"/>'),
+      menu: svg('<path d="M3 6h18M3 12h18M3 18h18"/>'),
+      apps: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>'),
+      grid: svg('<path d="M3 3h18v18H3zM9 3v18M15 3v18M3 9h18M3 15h18"/>'),
+      repost: svg('<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>'),
+      tagged: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="12" cy="10" r="3"/><path d="M6.5 19a6 6 0 0 1 11 0"/>'),
+      comment: svg('<path d="M20.7 16.4A9 9 0 1 0 17 19.9L21 21z"/>'),
+      bookmark: svg('<path d="M19 21l-7-6-7 6V3h14z"/>'),
+      more: svg('<circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/>'),
+      close: svg('<path d="M5 5l14 14M19 5 5 19"/>', "h-7 w-7"),
+      left: svg('<path d="m15 18-6-6 6-6"/>', "h-5 w-5"),
+      right: svg('<path d="m9 18 6-6-6-6"/>', "h-5 w-5"),
+      smile: svg('<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>'),
+      eye: svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', "h-5 w-5"),
+      person: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', "h-5 w-5"),
+    };
+    const heartFill = (cls) => '<svg viewBox="0 0 24 24" class="' + cls + '" fill="currentColor"><path d="M16.8 3.5c-2 0-3.6 1-4.8 2.7C10.8 4.5 9.2 3.5 7.2 3.5A4.7 4.7 0 0 0 2.5 8.4c0 5.5 9.5 12.1 9.5 12.1s9.5-6.6 9.5-12.1a4.7 4.7 0 0 0-4.7-4.9z"/></svg>';
+    const bubbleFill = (cls) => '<svg viewBox="0 0 24 24" class="' + cls + '" fill="currentColor"><path d="M20.7 16.4A9 9 0 1 0 17 19.9L21 21z"/></svg>';
+    const avatarOf = (u) => "https://picsum.photos/seed/" + encodeURIComponent(u) + "-avatar/200/200";
+    // "18w", "1d", "5h": Instagram style age
+    const ago = (iso) => {
+      const s = Math.max(1, (Date.now() - new Date(iso).getTime()) / 1000);
+      for (const [n, u] of [[604800, "w"], [86400, "d"], [3600, "h"], [60, "m"]]) if (s >= n) return Math.floor(s / n) + u;
+      return Math.floor(s) + "s";
+    };
+
+    function renderRail() {
+      $("#rail a").innerHTML = I.insta;
+      const me = session.get();
+      // Home reloads your own profile, the other icons only look the part
+      $("#railNav").innerHTML = (me ? '<a href="/u/' + encodeURIComponent(me) + '" title="Home" class="text-[#f5f5f5]">' + I.home + '</a>' : '<span class="text-[#f5f5f5]">' + I.home + '</span>') +
+        [I.reels, I.send, I.search, I.heart, I.plus, I.chart].map((i) => '<span class="cursor-default text-[#f5f5f5]">' + i + '</span>').join("") +
+        (me ? '<button id="meBtn" title="You"><img src="' + avatarOf(me) + '" class="h-7 w-7 rounded-full object-cover ring-2 ring-transparent hover:ring-white/40" alt="" /></button>' : "");
+      $("#railBottom").innerHTML = I.menu + I.apps;
+      if (!me) return;
+
+      // avatar menu: Profile / Log out
+      let menu = $("#meMenu");
+      if (!menu) {
+        menu = document.createElement("div");
+        menu.id = "meMenu";
+        menu.className = "fixed left-[80px] z-40 hidden w-56 overflow-hidden rounded-2xl bg-[#262626] py-2 text-sm shadow-2xl";
+        document.body.appendChild(menu);
+      }
+      menu.innerHTML =
+        '<a href="/u/' + encodeURIComponent(me) + '" class="flex items-center gap-3 px-4 py-3 hover:bg-[#363636]">' + svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', "h-5 w-5") + 'Profile</a>' +
+        '<div class="my-1 h-px bg-[#363636]"></div>' +
+        '<button id="railLogout" class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[#363636]">' + svg('<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>', "h-5 w-5") + 'Log out</button>';
+      $("#meBtn").onclick = (e) => {
+        e.stopPropagation();
+        const r = e.currentTarget.getBoundingClientRect();
+        menu.style.top = Math.max(8, r.top - 40) + "px";
+        menu.classList.toggle("hidden");
+      };
+      $("#railLogout").onclick = () => { session.clear(); location.assign("/"); };
+      document.addEventListener("click", (e) => { if (!menu.contains(e.target)) menu.classList.add("hidden"); });
+    }
+
+    function renderSession() {
+      const user = session.get();
+      $("#session").innerHTML = user
+        // looks like Instagram's Messages pill (not wired). Log out lives in the left rail, under your avatar.
+        ? I.send + '<span class="text-[15px] font-semibold">Messages</span>' +
+          '<span class="ml-2 flex -space-x-2">' + ["priya.nair", "aarav.sharma", "ananya.iyer"].map((u) =>
+            '<img src="' + avatarOf(u) + '" class="h-6 w-6 rounded-full border-2 border-[#262626] object-cover" alt="" />').join("") + '</span>'
+        : "";
+      $("#session").classList.toggle("hidden", !user);
+      renderRail();
+      const btn = $("#logout");
+      if (btn) btn.onclick = () => { session.clear(); location.assign("/"); };
+    }
+
+    // ---- / : pick a user ----
+    async function pickerPage() {
+      $("#app").innerHTML = '<p class="py-20 text-center text-zinc-500">Loading...</p>';
+      const { items } = await api("/profiles");
+      $("#app").innerHTML =
+        '<h1 class="text-center text-2xl font-semibold">Who is this?</h1>' +
+        '<p class="mt-1 mb-8 text-center text-sm text-zinc-400">Click a card to log in as that user.</p>' +
+        '<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">' +
+        items.map((p) =>
+          '<button data-user="' + esc(p.username) + '" class="flex items-center gap-4 rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-left transition hover:border-zinc-600 hover:bg-zinc-900">' +
+            '<img src="' + esc(p.avatarUrl) + '" alt="" class="h-16 w-16 rounded-full object-cover" />' +
+            '<span class="min-w-0"><span class="flex items-center gap-1.5 font-semibold"><span class="truncate">' + esc(p.username) + '</span>' + (p.verified ? tick : "") + '</span>' +
+            '<span class="block truncate text-sm text-zinc-400">' + esc(p.displayName) + '</span></span>' +
+          '</button>').join("") +
+        '</div>';
+      document.querySelectorAll("[data-user]").forEach((card) => {
+        card.onclick = () => { session.set(card.dataset.user); location.assign("/u/" + encodeURIComponent(card.dataset.user)); };
+      });
+    }
+
+    // ---- /u/:username : profile ----
+    async function profilePage(username) {
+      if (!session.get()) { location.replace("/"); return; }
+      $("#app").innerHTML = '<p class="py-20 text-center text-zinc-500">Loading...</p>';
+      let p = await api("/profiles/" + encodeURIComponent(username));
+      const isMe = session.get() === p.username;
+
+      $("#app").innerHTML =
+        '<div class="mx-auto max-w-[790px]">' +
+          '<section class="flex items-center gap-6 sm:gap-10">' +
+            '<img src="' + esc(p.avatarUrl) + '" alt="" class="h-20 w-20 shrink-0 rounded-full object-cover sm:h-[170px] sm:w-[170px]" />' +
+            '<div class="min-w-0">' +
+              '<h1 class="flex items-center gap-2 text-xl font-semibold sm:text-[26px]"><span class="truncate">' + esc(p.username) + '</span>' + (p.verified ? tick : "") + '<span class="ml-1 text-[#a8a8a8]">' + I.more + '</span></h1>' +
+              '<p class="mt-1 text-[15px]">' + esc(p.displayName) + '</p>' +
+              '<p id="stats" class="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-[15px]"></p>' +
+              (p.bio ? '<p class="mt-4 text-[15px]">' + esc(p.bio) + '</p>' : "") +
+            '</div>' +
+          '</section>' +
+          (isMe ? "" :
+            '<div class="mt-8 grid grid-cols-2 gap-2">' +
+              '<button id="follow"></button>' +
+              '<button class="cursor-default rounded-lg bg-[#262626] py-2.5 text-sm font-semibold">Message</button>' +
+            '</div>') +
+        '</div>' +
+        '<nav class="mx-auto mt-10 grid max-w-[935px] grid-cols-4 border-b border-[#262626] text-[#a8a8a8] lg:max-w-none">' +
+          '<button data-tab="post" class="flex justify-center border-b py-3" title="Posts">' + I.grid + '</button>' +
+          '<button data-tab="reel" class="flex justify-center border-b py-3" title="Reels">' + I.reels + '</button>' +
+          '<span class="flex cursor-default justify-center border-b border-transparent py-3 opacity-60" title="Reposts">' + I.repost + '</span>' +
+          '<span class="flex cursor-default justify-center border-b border-transparent py-3 opacity-60" title="Tagged">' + I.tagged + '</span>' +
+        '</nav>' +
+        '<div id="grid" class="mt-[2px] grid grid-cols-3 gap-[2px] sm:grid-cols-4"></div>' +
+        '<div class="mt-6 text-center"><button id="more" class="hidden rounded-lg bg-zinc-800 px-4 py-2 text-sm font-medium hover:bg-zinc-700">Load more</button></div>';
+
+      const paint = () => {
+        $("#stats").innerHTML =
+          '<span><b>' + Number(p.postsCount).toLocaleString() + '</b> posts</span>' +
+          '<span><b>' + fmt(p.followers) + '</b> followers</span>' +
+          '<span><b>' + fmt(p.following) + '</b> following</span>';
+        const btn = $("#follow");
+        if (btn) {
+          btn.textContent = p.isFollowing ? "Following" : "Follow";
+          btn.className = "rounded-lg py-2.5 text-sm font-semibold " + (p.isFollowing ? "bg-[#262626] hover:bg-[#363636]" : "bg-[#4a5df9] hover:bg-[#3b4ee8]");
+        }
+      };
+      paint();
+
+      // Follow: the number moves at once, the server number replaces it after the Kafka consumer has run.
+      const followBtn = $("#follow");
+      if (followBtn) {
+        followBtn.onclick = async () => {
+          const was = p.isFollowing;
+          followBtn.disabled = true;
+          p.isFollowing = !was;
+          p.followers = Math.max(0, p.followers + (was ? -1 : 1));
+          paint();
+          try {
+            await api("/profiles/" + encodeURIComponent(username) + "/follow", was ? "DELETE" : "POST");
+            setTimeout(async () => { try { p = await api("/profiles/" + encodeURIComponent(username)); paint(); } catch {} }, SYNC_MS);
+          } catch (e) {
+            p.isFollowing = was;
+            p.followers = Math.max(0, p.followers + (was ? 1 : -1));
+            paint();
+            toast(e.message);
+          } finally {
+            followBtn.disabled = false;
+          }
+        };
+      }
+
+      let type = "post";
+      let cursor = null;
+
+      const stat = (icon, value, label) =>
+        '<span class="flex min-w-0 items-center gap-1.5 whitespace-nowrap" title="' + label + '">' + icon +
+          '<span class="leading-none"><b class="text-[14px]">' + fmt(value) + '</b><span class="ml-1 text-[11px] font-medium text-white/75">' + label + '</span></span></span>';
+      const eyeFill = '<svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="currentColor"><path d="M12 5C5.6 5 2 12 2 12s3.6 7 10 7 10-7 10-7-3.6-7-10-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>';
+      const usersFill = '<svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="currentColor"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm7.5 0a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM1 20c0-3.9 3.6-7 8-7s8 3.1 8 7v1H1zm17.5 1v-1c0-2.4-1-4.5-2.7-5.9A6.4 6.4 0 0 1 23 20v1z"/></svg>';
+
+      // hover: likes and comments like Instagram, plus total views and unique viewers (the HyperLogLog demo)
+      const tile = (post) =>
+        '<a href="/p/' + esc(post._id) + '" data-post="' + esc(post._id) + '" class="group relative block aspect-[3/4] overflow-hidden bg-[#1a1a1a]">' +
+          '<img loading="lazy" src="' + esc(post.mediaUrl) + '" alt="' + esc(post.caption) + '" class="h-full w-full object-cover" />' +
+          (post.type === "reel" ? '<span class="absolute right-2.5 top-2.5 text-white drop-shadow">' + svg('<rect x="3" y="3" width="18" height="18" rx="4" fill="currentColor" stroke="none"/><path d="m10 8.5 5 3.5-5 3.5z" fill="#000" stroke="none"/>', "h-5 w-5") + '</span>' : "") +
+          '<div class="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100">' +
+            '<div class="grid grid-cols-2 gap-x-4 gap-y-3 px-3">' +
+              stat(heartFill("h-4 w-4 shrink-0"), post.likes, "likes") + stat(bubbleFill("h-4 w-4 shrink-0 -scale-x-100"), post.comments, "comments") +
+              stat(eyeFill, post.totalViews, "views") + stat(usersFill, post.uniqueViews, "unique") +
+            '</div>' +
+          '</div>' +
+        '</a>';
+
+      async function load(reset) {
+        if (reset) { cursor = null; $("#grid").innerHTML = ""; }
+        const q = "?authorId=" + encodeURIComponent(username) + "&type=" + type + "&limit=12" + (cursor ? "&cursor=" + cursor : "");
+        const { items, nextCursor } = await api("/posts" + q);
+        $("#grid").insertAdjacentHTML("beforeend", items.map(tile).join(""));
+        gridIds = [...document.querySelectorAll("#grid [data-post]")].map((a) => a.dataset.post);
+        cursor = nextCursor;
+        $("#more").classList.toggle("hidden", !nextCursor);
+        if (reset && items.length === 0) $("#grid").innerHTML = '<p class="col-span-full py-16 text-center text-zinc-500">Nothing here yet.</p>';
+      }
+
+      function markTabs() {
+        document.querySelectorAll("[data-tab]").forEach((b) => {
+          const on = b.dataset.tab === type;
+          b.classList.toggle("border-white", on);
+          b.classList.toggle("border-transparent", !on);
+          b.classList.toggle("text-[#f5f5f5]", on);
+        });
+      }
+      document.querySelectorAll("[data-tab]").forEach((b) => {
+        b.onclick = () => { type = b.dataset.tab; markTabs(); load(true).catch((e) => showError(e.message)); };
+      });
+      $("#more").onclick = () => load(false).catch((e) => showError(e.message));
+      // a tile opens the post as a modal over the grid (Ctrl / Cmd click still opens a new tab)
+      $("#grid").onclick = (e) => {
+        const a = e.target.closest("[data-post]");
+        if (!a || e.metaKey || e.ctrlKey) return;
+        e.preventDefault();
+        openPost(a.dataset.post).catch((err) => toast(err.message));
+      };
+      window.profileUser = username;
+      markTabs();
+      await load(true);
+    }
+
+    // ---- post modal (/p/:postId): opens over the profile like Instagram ----
+    let gridIds = []; // posts shown in the grid, for the prev / next arrows
+    let modalToken = 0; // a newer open wins over a slower older one
+
+    function closePost(push = true) {
+      $("#modal").classList.add("hidden");
+      $("#modal").innerHTML = "";
+      document.body.classList.remove("overflow-hidden");
+      if (push && location.pathname.startsWith("/p/") && window.profileUser) history.pushState({}, "", "/u/" + encodeURIComponent(window.profileUser));
+    }
+
+    async function openPost(postId, push = true) {
+      const token = ++modalToken;
+      if (push) history.pushState({}, "", "/p/" + postId);
+      document.body.classList.add("overflow-hidden");
+      const m = $("#modal");
+      m.classList.remove("hidden");
+      m.innerHTML = '<div class="flex h-full items-center justify-center text-[#a8a8a8]">Loading...</div>';
+
+      let post = await api("/posts/" + postId);
+      const author = await api("/profiles/" + encodeURIComponent(post.authorId)).catch(() => null);
+      if (token !== modalToken) return;
+      const at = gridIds.indexOf(postId);
+      const prev = at > 0 ? gridIds[at - 1] : null;
+      const next = at >= 0 && at < gridIds.length - 1 ? gridIds[at + 1] : null;
+      const av = (u, src, size) => '<img src="' + esc(src || avatarOf(u)) + '" alt="" class="' + size + ' shrink-0 rounded-full object-cover" />';
+      const arrow = (id, dir, side) => id ? '<button data-go="' + id + '" class="absolute ' + side + ' top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white text-black">' + I[dir] + '</button>' : "";
+
+      m.innerHTML =
+        '<button id="closeModal" class="absolute right-4 top-4 z-10 text-white" aria-label="Close">' + I.close + '</button>' +
+        arrow(prev, "left", "left-4") + arrow(next, "right", "right-4") +
+        '<div id="card" class="absolute inset-0 m-auto flex h-[92vh] w-[92vw] max-w-[1350px] overflow-hidden rounded-r bg-[#0c1014]">' +
+          '<div class="flex flex-1 items-center justify-center bg-black"><img src="' + esc(post.mediaUrl) + '" alt="' + esc(post.caption) + '" class="max-h-full max-w-full object-contain" /></div>' +
+          '<div class="hidden w-[500px] shrink-0 flex-col border-l border-[#262626] md:flex">' +
+            '<div class="flex items-center gap-3 border-b border-[#262626] px-4 py-3.5">' +
+              '<a href="/u/' + encodeURIComponent(post.authorId) + '" class="flex items-center gap-3">' + av(post.authorId, author && author.avatarUrl, "h-8 w-8") +
+              '<span class="flex items-center gap-1 text-sm font-semibold">' + esc(post.authorId) + (author && author.verified ? tick : "") + '</span></a>' +
+              '<span class="ml-auto text-[#f5f5f5]">' + I.more + '</span>' +
+            '</div>' +
+            '<div class="flex-1 space-y-5 overflow-y-auto px-4 py-4 text-sm">' +
+              '<div class="flex gap-3">' + av(post.authorId, author && author.avatarUrl, "h-8 w-8") +
+                '<div><p><b class="mr-1">' + esc(post.authorId) + '</b>' + esc(post.caption) + '</p><p class="mt-2 text-xs text-[#a8a8a8]">' + ago(post.createdAt) + '</p></div></div>' +
+              '<div id="comments" class="space-y-5"></div>' +
+              '<button id="moreComments" class="hidden w-full text-center text-[#a8a8a8]">' + I.plus + '</button>' +
+            '</div>' +
+            '<div class="border-t border-[#262626] px-4 pt-2">' +
+              '<div class="flex items-center gap-4 py-1.5"><button id="like" class="transition active:scale-90" aria-label="Like"></button>' + I.comment + I.repost + I.send + '<span class="ml-auto">' + I.bookmark + '</span></div>' +
+              '<p id="nums" class="text-sm"></p>' +
+              '<p class="mt-1 pb-3 text-xs text-[#a8a8a8]">' + esc(new Date(post.createdAt).toLocaleDateString("en", { month: "long", day: "numeric" })) + '</p>' +
+            '</div>' +
+            '<div class="flex items-center gap-3 border-t border-[#262626] px-4 py-3 text-sm">' + I.smile +
+              '<input disabled placeholder="Add a comment..." class="flex-1 bg-transparent placeholder-[#a8a8a8] outline-none" />' +
+              '<span class="font-semibold text-[#0095f6]/50">Post</span></div>' +
+          '</div>' +
+        '</div>';
+
+      const paint = () => {
+        $("#like").innerHTML = post.isLiked ? heartFill("h-6 w-6 text-[#ff3040]") : I.heart;
+        $("#nums").innerHTML =
+          '<b>' + fmt(post.likes) + ' likes</b>' +
+          '<span class="mt-1 flex items-center gap-4 text-[#a8a8a8]"><span class="flex items-center gap-1" title="Total views">' + I.eye + '<b class="text-[#f5f5f5]">' + fmt(post.totalViews) + '</b> views</span>' +
+          '<span class="flex items-center gap-1" title="Unique viewers, counted with a HyperLogLog">' + I.person + '<b class="text-[#f5f5f5]">' + fmt(post.uniqueViews) + '</b> unique</span></span>';
+      };
+      paint();
+      const refresh = async () => { try { post = await api("/posts/" + postId); if (token === modalToken) paint(); } catch {} };
+
+      // Like: the number moves at once, the server number replaces it after the Kafka consumer has run.
+      $("#like").onclick = async () => {
+        const btn = $("#like");
+        const was = post.isLiked;
+        btn.disabled = true;
+        post.isLiked = !was;
+        post.likes = Math.max(0, (post.likes ?? 0) + (was ? -1 : 1));
+        paint();
+        try {
+          await api("/posts/" + postId + "/like", was ? "DELETE" : "POST");
+          setTimeout(refresh, SYNC_MS);
+        } catch (e) {
+          post.isLiked = was;
+          post.likes = Math.max(0, post.likes + (was ? 1 : -1));
+          paint();
+          toast(e.message);
+        } finally {
+          btn.disabled = false;
+        }
+      };
+
+      $("#closeModal").onclick = () => closePost();
+      m.onclick = (e) => { if (e.target === m) closePost(); }; // click on the dark backdrop
+      m.querySelectorAll("[data-go]").forEach((b) => {
+        b.onclick = () => { history.replaceState({}, "", "/p/" + b.dataset.go); openPost(b.dataset.go, false).catch((e) => toast(e.message)); };
+      });
+
+      // comments, newest first
+      let cursor = null;
+      async function loadComments() {
+        const { items, nextCursor } = await api("/posts/" + postId + "/comments?limit=15" + (cursor ? "&cursor=" + cursor : ""));
+        if (token !== modalToken) return;
+        $("#comments").insertAdjacentHTML("beforeend", items.map((c) =>
+          '<div class="flex gap-3">' + av(c.authorId, null, "h-8 w-8") +
+            '<div class="flex-1"><p><b class="mr-1">' + esc(c.authorId) + '</b>' + esc(c.text) + '</p>' +
+            '<p class="mt-1.5 text-xs text-[#a8a8a8]">' + ago(c.createdAt) + '<span class="ml-3 font-semibold">Reply</span></p></div>' +
+            '<span class="pt-1 text-[#a8a8a8]">' + svg('<path d="M16.8 3.5c-2 0-3.6 1-4.8 2.7C10.8 4.5 9.2 3.5 7.2 3.5A4.7 4.7 0 0 0 2.5 8.4c0 5.5 9.5 12.1 9.5 12.1s9.5-6.6 9.5-12.1a4.7 4.7 0 0 0-4.7-4.9z"/>', "h-3 w-3") + '</span>' +
+          '</div>').join(""));
+        cursor = nextCursor;
+        $("#moreComments").classList.toggle("hidden", !nextCursor);
+      }
+      $("#moreComments").onclick = () => loadComments().catch((e) => toast(e.message));
+      await loadComments();
+
+      // Opening the post is the view. The count shows up after the Kafka consumer has run, so read it again a moment later.
+      api("/posts/" + postId + "/view", "POST").then(() => setTimeout(refresh, SYNC_MS)).catch((e) => toast(e.message));
+    }
+
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#modal").classList.contains("hidden")) closePost(); });
+
+    // ---- router: the server sends this same file for "/", "/u/:username" and "/p/:postId" ----
+    renderSession();
+    const userMatch = location.pathname.match(/^\/u\/([^/]+)\/?$/);
+    const postMatch = location.pathname.match(/^\/p\/([0-9a-fA-F]{24})\/?$/);
+    // a /p/ link opened directly: show the author's profile behind it, then the post on top
+    const postFirst = async (id) => {
+      const post = await api("/posts/" + id);
+      await profilePage(post.authorId);
+      await openPost(id, false);
+    };
+    let page = Promise.resolve();
+    if (!userMatch && !postMatch) page = pickerPage();
+    else if (!session.get()) location.replace("/"); // not logged in: back to the cards
+    else page = userMatch ? profilePage(decodeURIComponent(userMatch[1])) : postFirst(postMatch[1]);
+    page.catch((e) => showError(e.message));
+
+    // browser back / forward between the profile and an open post
+    window.addEventListener("popstate", () => {
+      const id = location.pathname.match(/^\/p\/([0-9a-fA-F]{24})\/?$/);
+      if (id) openPost(id[1], false).catch((e) => toast(e.message));
+      else closePost(false);
+    });
+  </script>
+</body>
+</html>
